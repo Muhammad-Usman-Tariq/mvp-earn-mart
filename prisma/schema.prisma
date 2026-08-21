@@ -1,0 +1,247 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id                String   @id @default(uuid())
+  email             String?  @unique
+  phone             String?  @unique
+  password_hash     String
+  role              String   @default("affiliate") // guest, customer, affiliate, partner, admin
+  admin_role        String?  // super_admin, finance_admin, order_admin, support_admin
+  referral_code     String   @unique
+  sponsor_id        String?
+  is_verified       Boolean  @default(false)
+  profile_completed Boolean  @default(false)
+  name              String?
+  city              String?
+  cnic              String?
+  bank_name         String?
+  bank_account_no   String?
+  bank_iban         String?
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  sponsor           User?    @relation("UserSponsor", fields: [sponsor_id], references: [id])
+  referrals         User[]   @relation("UserSponsor")
+
+  wallet_transactions WalletTransaction[]
+  orders             Order[]
+  payment_proofs     PaymentProof[]
+  withdrawals        WithdrawalRequest[]
+  partner_investments PartnerInvestment[]
+  audit_logs         AuditLog[] @relation("ActorAuditLogs")
+
+  @@index([sponsor_id])
+  @@index([referral_code])
+}
+
+model ReferralClosure {
+  id            String   @id @default(uuid())
+  ancestor_id   String
+  descendant_id String
+  depth         Int
+  created_at    DateTime @default(now())
+
+  @@unique([ancestor_id, descendant_id])
+  @@index([ancestor_id])
+  @@index([descendant_id])
+}
+
+model WalletTransaction {
+  id             String   @id @default(uuid())
+  user_id        String
+  wallet_type    String   // commission, partner_profit, main
+  type           String   // credit, debit
+  amount         Int      // Integer paisa (1 PKR = 100 paisa)
+  status         String   @default("pending") // pending, available, reversed
+  reference_type String   // order, commission, withdrawal, refund_clawback, partner_deposit, partner_yield
+  reference_id   String?
+  created_at     DateTime @default(now())
+
+  user           User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, wallet_type, status])
+  @@index([reference_id])
+}
+
+model Category {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  slug        String   @unique
+  description String?
+  products    Product[]
+  subcategories Subcategory[]
+}
+
+model Subcategory {
+  id          String   @id @default(uuid())
+  category_id String
+  name        String
+  slug        String
+  category    Category @relation(fields: [category_id], references: [id], onDelete: Cascade)
+  products    Product[]
+
+  @@unique([category_id, name])
+}
+
+model Product {
+  id                       String   @id @default(uuid())
+  title                    String
+  slug                     String   @unique
+  description              String
+  price_paisa              Int      // Integer paisa
+  net_commissionable_paisa Int      // Integer paisa
+  stock_count              Int      @default(0)
+  category_id              String
+  subcategory_id           String?
+  image_url                String?  // Saved relative path e.g. /uploads/prod-123.jpg
+  is_active                Boolean  @default(true)
+  created_at               DateTime @default(now())
+  updated_at               DateTime @updatedAt
+
+  category                 Category @relation(fields: [category_id], references: [id])
+  subcategory              Subcategory? @relation(fields: [subcategory_id], references: [id])
+  order_items              OrderItem[]
+
+  @@index([category_id])
+  @@index([subcategory_id])
+}
+
+model Order {
+  id                   String   @id @default(uuid())
+  order_number         String   @unique
+  user_id              String?  // null if guest checkout
+  guest_name           String?
+  guest_email          String?
+  guest_phone          String?
+  guest_city           String?
+  shipping_address     String
+  total_amount_paisa   Int      // Integer paisa
+  status               String   @default("awaiting_payment") // awaiting_payment, paid, processing, shipped, delivered, completed, returned
+  payment_method       String   // jazzcash, easypaisa, bank, crypto, cash
+  return_window_expiry DateTime?
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  user                 User?    @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  items                OrderItem[]
+  payment_proofs       PaymentProof[]
+
+  @@index([user_id])
+  @@index([status])
+}
+
+model OrderItem {
+  id                       String  @id @default(uuid())
+  order_id                 String
+  product_id               String
+  quantity                 Int
+  unit_price_paisa         Int
+  net_commissionable_paisa Int
+
+  order                    Order   @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  product                  Product @relation(fields: [product_id], references: [id])
+}
+
+model PaymentProof {
+  id               String   @id @default(uuid())
+  order_id         String
+  user_id          String?
+  method           String   // jazzcash, easypaisa, bank, crypto, cash
+  amount_paisa     Int
+  tx_ref_no        String
+  proof_image_path String   // local file path /uploads/proof-123.png
+  proof_hash       String   // sha256 of image + tx_ref for duplicate detection
+  status           String   @default("pending") // pending, approved, rejected
+  is_flagged       Boolean  @default(false)
+  flag_reason      String?
+  rejection_reason String?
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  order            Order    @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  user             User?    @relation(fields: [user_id], references: [id], onDelete: SetNull)
+
+  @@index([order_id])
+  @@index([proof_hash])
+  @@index([tx_ref_no])
+}
+
+model WithdrawalRequest {
+  id               String   @id @default(uuid())
+  user_id          String
+  wallet_type      String   // commission, partner_profit
+  amount_paisa     Int      // Requested gross amount in paisa
+  fee_paisa        Int      // 5% fee in paisa
+  net_amount_paisa Int      // Net payout amount in paisa
+  payout_method    String   // bank, jazzcash, easypaisa, crypto
+  account_details  String
+  status           String   @default("requested") // requested, admin_review, approved, rejected, paid
+  rejection_reason String?
+  transaction_id   String?  // Reference to ledger transaction ID
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  user             User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([status])
+}
+
+model PartnerInvestment {
+  id                      String   @id @default(uuid())
+  user_id                 String
+  principal_paisa         Int
+  weekly_profit_rate      Float    @default(0.02) // e.g. 2% per week (0.02)
+  total_profit_paid_paisa Int      @default(0)
+  status                  String   @default("active") // active, withdrawn, matured
+  created_at              DateTime @default(now())
+  updated_at              DateTime @updatedAt
+
+  user                    User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  profit_logs             PartnerProfitLog[]
+
+  @@index([user_id])
+}
+
+model PartnerProfitLog {
+  id             String            @id @default(uuid())
+  investment_id  String
+  amount_paisa   Int
+  profit_date    DateTime          @default(now())
+  transaction_id String?
+  created_at     DateTime          @default(now())
+
+  investment     PartnerInvestment @relation(fields: [investment_id], references: [id], onDelete: Cascade)
+}
+
+model SystemSetting {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  description String?
+  updated_at  DateTime @updatedAt
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  actor_id     String?
+  action       String   // e.g. PAYMENT_APPROVED, WITHDRAWAL_PAID, ORDER_RETURNED
+  entity_type  String   // e.g. Order, PaymentProof, WithdrawalRequest
+  entity_id    String
+  before_state String?  // JSON string
+  after_state  String?  // JSON string
+  ip_address   String?
+  created_at   DateTime @default(now())
+
+  actor        User?    @relation("ActorAuditLogs", fields: [actor_id], references: [id], onDelete: SetNull)
+
+  @@index([actor_id])
+  @@index([entity_type, entity_id])
+}

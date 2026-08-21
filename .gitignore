@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.local
+.next/
+dist/
+build/
+*.log
+*.tsbuildinfo
+prisma/dev.db
+public/uploads/*
+!public/uploads/.gitkeep
